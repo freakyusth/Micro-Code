@@ -1,0 +1,42 @@
+#include <Arduino.h>
+
+const int PIR_PIN = 2;    // Chân PD2 nhận tín hiệu từ PIR
+const int ALERT_PIN = 8;  // Chân PB0 xuất tín hiệu ra LED/Buzzer
+
+int currentState = LOW;   // Trạng thái hiện tại của PIR
+int lastState = LOW;      // Trạng thái trước đó của PIR
+
+void setup() {
+    Serial.begin(9600);
+    
+    pinMode(PIR_PIN, INPUT);
+    pinMode(ALERT_PIN, OUTPUT);
+    digitalWrite(ALERT_PIN, LOW); // Tắt LED/Buzzer ban đầu
+    
+    Serial.println("=== ATMEGA328 PIR MOTION DETECTOR READY ===");
+}
+
+void loop() {
+    // Đọc tín hiệu Digital từ cảm biến PIR
+    currentState = digitalRead(PIR_PIN);
+
+    // YÊU CẦU 6: Chỉ xử lý và gửi Serial khi TRẠNG THÁI THAY ĐỔI
+    if (currentState != lastState) {
+        if (currentState == LOW) {
+            // Phát hiện chuyển động
+            digitalWrite(ALERT_PIN, HIGH);
+            Serial.println("[ALERT] Motion Detected! LED/Buzzer ON.");
+            delay(50);
+        } else {
+            // Hết chuyển động
+            digitalWrite(ALERT_PIN, LOW);
+            Serial.println("[INFO] Motion Ended. LED/Buzzer OFF.");
+            delay(50);
+        }
+        
+        // Cập nhật trạng thái cũ để so sánh cho lần quét sau
+        lastState = currentState;
+    }
+
+    delay(50); // Chờ ngắn để chống dội tín hiệu (debounce)
+}
