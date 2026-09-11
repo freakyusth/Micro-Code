@@ -1,0 +1,148 @@
+#include <Arduino.h>
+
+// --- Biến chia sẻ dữ liệu ---
+volatile uint16_t adc_val = 0;       // Dữ liệu ADC0 (Quang trở LDR)
+volatile uint8_t  pwm_duty = 0;      // Giá trị băm xung PWM (0 - 255)
+volatile uint16_t sensor_val = 0;    // Dữ liệu ADC1 (Cảm biến phụ/Gas)
+
+// --- Bộ đếm thời gian (Đơn vị tick 1 ms) ---
+volatile uint16_t count_task1 = 10;   // Task 1: 10 ms
+volatile uint16_t count_task2 = 20;   // Task 2: 20 ms
+volatile uint16_t count_task3 = 100;  // Task 3: 100 ms
+volatile uint16_t count_task4 = 1000; // Task 4: 1000 ms
+
+// --- Cờ báo thực thi từng Task ---
+volatile bool flag_task1 = false;
+volatile bool flag_task2 = false;
+volatile bool flag_task3 = false;
+volatile bool flag_task4 = false;
+
+// ============================================================================
+// NGẮT ĐỊNH THỜI 1 MS BẰNG TIMER1 (CTC MODE)
+// ============================================================================
+ISR(TIMER1_COMPA_vect) {
+  // Task 1: Chu kỳ 10 ms
+  if (--count_task1 == 0) {
+    count_task1 = 10;
+    flag_task1 = true;
+  }
+
+  // Task 2: Chu kỳ 20 ms
+  if (--count_task2 == 0) {
+    count_task2 = 20;
+    flag_task2 = true;
+  }
+
+  // Task 3: Chu kỳ 100 ms
+  if (--count_task3 == 0) {
+    count_task3 = 100;
+    flag_task3 = true;
+  }
+
+  // Task 4: Chu kỳ 1000 ms (1 giây)
+  if (--count_task4 == 0) {
+    count_task4 = 1000;
+    flag_task4 = true;
+  }
+}
+
+void timer1_init_1ms() {
+  cli(); // Tắt ngắt toàn cục khi nạp giá trị thanh ghi
+
+  // Cấu hình Timer1 về CTC Mode 4 (WGM13:10 = 0100)
+  TCCR1A = 0; // Ngắt kết nối chân xuất sóng phần cứng OC1A/OC1B
+  
+  // Prescaler = 64 (CS12 = 0, CS11 = 1, CS10 = 1)
+  // WGM12 = 1 kích hoạt chế độ CTC
+  TCCR1B = (1 << WGM12) | (1 << CS11) | (1 << CS10);
+
+  // Tính toán giá trị nạp:
+  // f_timer = 16 MHz / 64 = 250 kHz -> 1 tick = 4 us
+  // Thời gian 1 ms = 1000 us -> Số tick = 1000 / 4 = 250 ticks
+  // TOP (OCR1A) = 250 - 1 = 249[cite: 1]
+  TCNT1 = 0;   // Reset bộ đếm
+  OCR1A = 249; // Đặt ngưỡng so sánh ngắt
+
+  // Cho phép ngắt so sánh kênh A của Timer1 (OCIE1A)[cite: 1]
+  TIMSK1 |= (1 << OCIE1A);
+
+  sei(); // Bật lại ngắt toàn cục
+}
+
+// ============================================================================
+// ĐỊNH NGHĨA CÁC TÁC VỤ (TASKS)
+// ============================================================================
+
+// Task 1: Đọc ADC kênh A0 (Quang trở LDR) mỗi 10 ms
+void Task1_Read_ADC() {
+  adc_val = analogRead(A0);
+}
+
+// Task 2: Cập nhật độ sáng LED qua PWM chân D6 (Timer0/OC0A) mỗi 20 ms
+void Task2_Update_PWM() {
+  // Ánh xạ dải ADC 10-bit (0 - 1023) sang dải PWM 8-bit (0 - 255)
+  pwm_duty = (uint8_t)(adc_val >> 2);
+  
+  // Xuất PWM ra chân D6 (Chân PD6 thuộc Timer0, không bị ảnh hưởng bởi Timer1)
+  analogWrite(6, pwm_duty);
+}
+
+// Task 3: Đọc cảm biến phụ kênh A1 (Cảm biến Khí gas / Triết áp) mỗi 100 ms
+void Task3_Read_Sensor() {
+  sensor_val = analogRead(A1);
+}
+
+// Task 4: Gửi dữ liệu qua UART mỗi 1000 ms (115200 baud)[cite: 1]
+void Task4_Send_UART() {
+  Serial.print(F("[1000ms Task] ADC0(LDR): "));
+  Serial.print(adc_val);
+  Serial.print(F(" | PWM_LED(D6): "));
+  Serial.print(pwm_duty);
+  Serial.print(F(" | ADC1(Gas): "));
+  Serial.println(sensor_val);
+}
+
+// ============================================================================
+// MAIN SETUP & SCHEDULER DISPATCHER
+// ============================================================================
+
+void setup() {
+  // Khởi tạo UART tốc độ 115200 baud
+  Serial.begin(115200);
+  
+  // Cấu hình chân D6 (PD6) làm đầu ra xuất xung điều khiển LED
+  pinMode(6, OUTPUT);
+
+  // Khởi tạo Timer1 tạo nhịp 1 ms
+  timer1_init_1ms();
+
+  Serial.println(F("========================================"));
+  Serial.println(F("  TIMER1 1MS SCHEDULER SYSTEM READY     "));
+  Serial.println(F("========================================"));
+}
+
+void loop() {
+  // Task 1 Dispatcher (10 ms)
+  if (flag_task1) {
+    flag_task1 = false;
+    Task1_Read_ADC();
+  }
+
+  // Task 2 Dispatcher (20 ms)
+  if (flag_task2) {
+    flag_task2 = false;
+    Task2_Update_PWM();
+  }
+
+  // Task 3 Dispatcher (100 ms)
+  if (flag_task3) {
+    flag_task3 = false;
+    Task3_Read_Sensor();
+  }
+
+  // Task 4 Dispatcher (1000 ms)
+  if (flag_task4) {
+    flag_task4 = false;
+    Task4_Send_UART();
+  }
+}
