@@ -1,0 +1,413 @@
+#define F_CPU 16000000UL
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <stdint.h>
+
+/* =========================================================
+   LCD PIN CONFIGURATION
+   ========================================================= */
+
+#define LCD_RS  PB0
+#define LCD_EN  PB1
+#define LCD_D4  PB5
+#define LCD_D5  PB4
+#define LCD_D6  PB3
+#define LCD_D7  PB2
+
+/* =========================================================
+   LCD LOW LEVEL FUNCTIONS
+   ========================================================= */
+
+void LCD_Enable(void)
+{
+    PORTB |= (1 << LCD_EN);
+    _delay_us(1);
+
+    PORTB &= ~(1 << LCD_EN);
+    _delay_us(100);
+}
+
+void LCD_Send4Bit(uint8_t data)
+{
+    /* Clear D4-D7 */
+    PORTB &= ~((1 << LCD_D4) |
+               (1 << LCD_D5) |
+               (1 << LCD_D6) |
+               (1 << LCD_D7));
+
+    /* Set D4 */
+    if (data & 0x01)
+        PORTB |= (1 << LCD_D4);
+
+    /* Set D5 */
+    if (data & 0x02)
+        PORTB |= (1 << LCD_D5);
+
+    /* Set D6 */
+    if (data & 0x04)
+        PORTB |= (1 << LCD_D6);
+
+    /* Set D7 */
+    if (data & 0x08)
+        PORTB |= (1 << LCD_D7);
+
+    LCD_Enable();
+}
+
+void LCD_Command(uint8_t command)
+{
+    /* RS = 0 -> command */
+    PORTB &= ~(1 << LCD_RS);
+
+    /* Send high nibble */
+    LCD_Send4Bit(command >> 4);
+
+    /* Send low nibble */
+    LCD_Send4Bit(command & 0x0F);
+
+    _delay_ms(2);
+}
+
+void LCD_Data(uint8_t data)
+{
+    /* RS = 1 -> data */
+    PORTB |= (1 << LCD_RS);
+
+    /* Send high nibble */
+    LCD_Send4Bit(data >> 4);
+
+    /* Send low nibble */
+    LCD_Send4Bit(data & 0x0F);
+
+    _delay_us(100);
+}
+
+void LCD_Init(void)
+{
+    /* PB0-PB5 = OUTPUT */
+    DDRB |= (1 << LCD_RS) |
+            (1 << LCD_EN) |
+            (1 << LCD_D4) |
+            (1 << LCD_D5) |
+            (1 << LCD_D6) |
+            (1 << LCD_D7);
+
+    /* Initial state */
+    PORTB &= ~((1 << LCD_RS) |
+               (1 << LCD_EN) |
+               (1 << LCD_D4) |
+               (1 << LCD_D5) |
+               (1 << LCD_D6) |
+               (1 << LCD_D7));
+
+    _delay_ms(20);
+
+    /* Force LCD to 8-bit initialization state */
+    LCD_Send4Bit(0x03);
+    _delay_ms(5);
+
+    LCD_Send4Bit(0x03);
+    _delay_us(150);
+
+    LCD_Send4Bit(0x03);
+    _delay_us(150);
+
+    /* Switch to 4-bit mode */
+    LCD_Send4Bit(0x02);
+    _delay_us(150);
+
+    /* 4-bit, 2 lines, 5x8 font */
+    LCD_Command(0x28);
+
+    /* Display ON, cursor OFF */
+    LCD_Command(0x0C);
+
+    /* Clear display */
+    LCD_Command(0x01);
+
+    /* Entry mode */
+    LCD_Command(0x06);
+
+    _delay_ms(2);
+}
+
+/* =========================================================
+   LCD HIGH LEVEL FUNCTIONS
+   ========================================================= */
+
+void LCD_Clear(void)
+{
+    LCD_Command(0x01);
+    _delay_ms(2);
+}
+
+void LCD_SetCursor(uint8_t row, uint8_t column)
+{
+    uint8_t address;
+
+    if (row == 0)
+        address = 0x80 + column;
+    else
+        address = 0xC0 + column;
+
+    LCD_Command(address);
+}
+
+void LCD_Print(char *str)
+{
+    while (*str)
+    {
+        LCD_Data(*str);
+        str++;
+    }
+}
+
+void LCD_PrintNumber(uint16_t number)
+{
+    char buffer[6];
+    uint8_t i = 0;
+
+    if (number == 0)
+    {
+        LCD_Data('0');
+        return;
+    }
+
+    while (number > 0)
+    {
+        buffer[i++] = (number % 10) + '0';
+        number /= 10;
+    }
+
+    while (i > 0)
+    {
+        LCD_Data(buffer[--i]);
+    }
+}
+
+/* =========================================================
+   ADC CONFIGURATION
+   ========================================================= */
+
+void ADC_Init(void)
+{
+    /*
+        REFS1:0 = 01
+        AVCC = Vref
+
+        ADLAR = 0
+        Right Adjust
+
+        MUX = 0000
+        ADC0 = PC0
+    */
+
+    ADMUX = (1 << REFS0);
+
+    /*
+        ADEN = 1
+        Enable ADC
+
+        ADPS2:0 = 111
+        Prescaler = 128
+
+        F_CPU = 16 MHz
+
+        F_ADC = 16 MHz / 128
+              = 125 kHz
+    */
+
+    ADCSRA = (1 << ADEN) |
+             (1 << ADPS2) |
+             (1 << ADPS1) |
+             (1 << ADPS0);
+
+    /*
+        PC0 = ADC0 = INPUT
+    */
+
+    DDRC &= ~(1 << PC0);
+
+    /*
+        Disable digital input buffer on ADC0
+        This is optional but recommended.
+    */
+
+    DIDR0 |= (1 << ADC0D);
+}
+
+/* =========================================================
+   ADC READ - POLLING
+   ========================================================= */
+
+uint16_t ADC_Read(void)
+{
+    uint8_t low;
+    uint8_t high;
+
+    /*
+        Start ADC conversion
+    */
+
+    ADCSRA |= (1 << ADSC);
+
+    /*
+        Polling
+
+        ADSC = 1 -> conversion running
+        ADSC = 0 -> conversion finished
+    */
+
+    while (ADCSRA & (1 << ADSC))
+    {
+        /* Wait */
+    }
+
+    /*
+        IMPORTANT:
+        Read ADCL FIRST
+        Then ADCH
+    */
+
+    low = ADCL;
+    high = ADCH;
+
+    /*
+        ADLAR = 0
+
+        ADCH:
+        000000xx
+
+        ADCL:
+        xxxxxxxx
+
+        Combine into 10-bit result
+    */
+
+    return ((uint16_t)high << 8) | low;
+}
+
+/* =========================================================
+   ADC AVERAGE - 16 SAMPLES
+   ========================================================= */
+
+uint16_t ADC_Average(void)
+{
+    uint32_t sum = 0;
+
+    uint8_t i;
+
+    for (i = 0; i < 16; i++)
+    {
+        sum += ADC_Read();
+    }
+
+    return (uint16_t)(sum / 16);
+}
+
+/* =========================================================
+   ADC TO VOLTAGE
+   ========================================================= */
+
+uint16_t ADC_To_mV(uint16_t adc)
+{
+    /*
+        V = ADC * Vref / 1023
+
+        Vref = 5V = 5000mV
+    */
+
+    return (uint32_t)adc * 5000UL / 1023UL;
+}
+
+/* =========================================================
+   MAIN
+   ========================================================= */
+
+int main(void)
+{
+    uint16_t adc_value;
+    uint16_t voltage_mV;
+
+    uint16_t voltage_integer;
+    uint16_t voltage_decimal;
+
+    LCD_Init();
+
+    ADC_Init();
+
+    LCD_Clear();
+
+    while (1)
+    {
+        /*
+            1. Take 16 samples
+        */
+
+        adc_value = ADC_Average();
+
+        /*
+            2. Convert ADC to voltage
+        */
+
+        voltage_mV = ADC_To_mV(adc_value);
+
+        /*
+            Split voltage into:
+            
+            integer part
+            decimal part
+        */
+
+        voltage_integer = voltage_mV / 1000;
+        voltage_decimal = voltage_mV % 1000;
+
+        /*
+            LINE 1
+            ADC: xxx
+        */
+
+        LCD_SetCursor(0, 0);
+
+        LCD_Print("ADC: ");
+        LCD_PrintNumber(adc_value);
+
+        /*
+            Clear remaining characters
+        */
+
+        LCD_Print("     ");
+
+        /*
+            LINE 2
+            V: x.xxx V
+        */
+
+        LCD_SetCursor(1, 0);
+
+        LCD_Print("V: ");
+        LCD_PrintNumber(voltage_integer);
+        LCD_Data('.');
+
+        /*
+            Always display 3 digits
+        */
+
+        if (voltage_decimal < 100)
+            LCD_Data('0');
+
+        if (voltage_decimal < 10)
+            LCD_Data('0');
+
+        LCD_PrintNumber(voltage_decimal);
+
+        LCD_Print(" V");
+
+        /*
+            Update LCD approximately every 200 ms
+        */
+
+        _delay_ms(200);
+    }
+}
