@@ -1,0 +1,62 @@
+#include <Arduino.h>
+#include <LiquidCrystal.h>
+
+LiquidCrystal lcd(A0, A1, A2, A3, A4, A5);
+
+const int PIN_PULSE_GEN = 3; 
+const int PIN_ICP1      = 8; 
+
+volatile uint16_t t1 = 0, t2 = 0;
+volatile uint16_t periodTicks = 0;
+volatile bool newCapture = false;
+
+ISR(TIMER1_CAPT_vect) {
+  t2 = ICR1;                     
+  periodTicks = (uint16_t)(t2 - t1); 
+  t1 = t2;                       
+  newCapture = true;             
+}
+
+void setup() {
+  // Khởi tạo LCD
+  lcd.begin(16, 2);
+  delay(100);
+  lcd.clear();
+  
+  lcd.setCursor(0, 0);
+  lcd.print("Practice 7: ICP1");
+
+  // Phát xung mẫu 1000 Hz tại PD3
+  pinMode(PIN_PULSE_GEN, OUTPUT);
+  tone(PIN_PULSE_GEN, 1000); 
+
+  pinMode(PIN_ICP1, INPUT);
+
+  noInterrupts();
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1  = 0;
+
+  TCCR1B |= (1 << ICNC1) | (1 << ICES1) | (1 << CS11) | (1 << CS10); // Prescaler = 64
+  TIMSK1 |= (1 << ICIE1); // Bật ngắt ICP1
+  interrupts();
+}
+
+void loop() {
+  if (newCapture) {
+    newCapture = false;
+
+    if (periodTicks > 0) {
+      float frequency = 250000.0 / (float)periodTicks;
+
+      // Khóa ngắt tạm thời để truyền dữ liệu 4-bit tới LCD không bị ngắt quãng
+      noInterrupts(); 
+      lcd.setCursor(0, 1);
+      lcd.print("F: ");
+      lcd.print(frequency, 1);
+      lcd.print(" Hz      "); // Thêm khoảng trắng cuối để đè sạch ký tự cũ
+      interrupts(); // Bật lại ngắt
+    }
+  }
+  delay(300);
+}
