@@ -1,0 +1,39 @@
+#include <Arduino.h>
+
+// Pin Bitmask Definitions
+#define BUTTON_PIN      PD2   // Input: Push Button (Active-LOW with pull-up)
+#define STATUS_LED_PIN  PB4   // Output: Status LED
+#define BLINK_LED_PIN   PB5   // Output: Blink Indicator LED (Heartbeat)
+#define BUZZER_PIN      PB1   // Output: Piezo Buzzer
+
+void gpio_init(void) {
+    // 1. Configure PD2 as Input and enable internal pull-up
+    DDRD &= ~(1 << BUTTON_PIN);
+    PORTD |= (1 << BUTTON_PIN);
+
+    // 2. Configure PB1, PB4, and PB5 as Outputs
+    DDRB |= (1 << BUZZER_PIN) | (1 << STATUS_LED_PIN) | (1 << BLINK_LED_PIN);
+
+    // 3. Initial state: Turn all outputs OFF (Logic LOW)
+    PORTB &= ~((1 << BUZZER_PIN) | (1 << STATUS_LED_PIN) | (1 << BLINK_LED_PIN));
+}
+
+int main(void) {
+    gpio_init();
+
+    while (1) {
+        // Toggle Blink Indicator LED (PB5) continuously
+        PORTB ^= (1 << BLINK_LED_PIN);
+
+        // Read active-LOW Push Button on PD2
+        if (!(PIND & (1 << BUTTON_PIN))) {
+            // Button PRESSED: Activate Status LED and Buzzer
+            PORTB |= (1 << STATUS_LED_PIN) | (1 << BUZZER_PIN);
+        } else {
+            // Button RELEASED: Deactivate Status LED and Buzzer
+            PORTB &= ~((1 << STATUS_LED_PIN) | (1 << BUZZER_PIN));
+        }
+        _delay_ms(100); // Polling sampling interval and blink pace
+    }
+    return 0;
+}
